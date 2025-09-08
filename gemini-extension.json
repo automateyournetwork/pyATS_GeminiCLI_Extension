@@ -1,0 +1,12 @@
+{
+  "name": "pyATS",
+  "version": "1.0.0",
+  "mcpServers": {
+    "pyATS": {
+      "command": "bash",
+      "args": ["${extensionPath}${/}servers${/}run.sh"]
+    }
+  },
+  "contextFileName": "GEMINI.md",
+  "excludeTools": []
+}
