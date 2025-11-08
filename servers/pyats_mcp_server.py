@@ -16,6 +16,10 @@ import asyncio
 from functools import partial
 import mcp.types as types
 from mcp.server.fastmcp import FastMCP
+from google import genai
+from google.genai import types
+
+client = genai.Client()
 
 # --- Basic Logging Setup ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -451,6 +455,100 @@ async def pyats_run_linux_command(device_name: str, command: str) -> str:
     except Exception as e:
         logger.error(f"Error in pyats_run_linux_command: {e}", exc_info=True)
         return json.dumps({"status": "error", "error": str(e)}, indent=2)
+
+@mcp.tool()
+async def upload_and_index(json_path: str) -> str:
+    """
+    Upload a JSON or text file to Gemini File Search for RAG augmentation.
+    Useful for large CLI outputs or pyATS parsed results.
+    """
+    import asyncio, os
+
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(f"{json_path} not found")
+
+    store = client.file_search_stores.create(
+        config={"display_name": f"pyats_store_{int(asyncio.get_event_loop().time())}"}
+    )
+    store_name = getattr(store, "name", str(store))
+    print(f"🪣 Using FileSearchStore name: {store_name}")
+
+    op = client.file_search_stores.upload_to_file_search_store(
+        file_search_store_name=store_name,
+        file=json_path,
+        config={
+            "display_name": os.path.basename(json_path),
+            "mime_type": "text/plain",
+            "chunking_config": {
+                "white_space_config": {
+                    "max_tokens_per_chunk": 500,
+                    "max_overlap_tokens": 100,
+                }
+            },
+        },
+    )
+
+    op_name = getattr(op, "name", str(op))
+    # Poll asynchronously (non-blocking)
+    for _ in range(60):
+        try:
+            current = client.operations.get(op_name)
+            if getattr(current, "done", False) or (
+                isinstance(current, dict) and current.get("done")
+            ):
+                break
+        except Exception as e:
+            print(f"⚠️ Polling error: {e}")
+        await asyncio.sleep(2)
+
+    return store_name
+
+@mcp.tool()
+async def analyze_router(store_name: str, question: str) -> dict:
+    """
+    Ask Gemini 2.5 Flash a question about a router or network dataset
+    using Gemini File Search grounding.
+
+    Args:
+        store_name: The File Search store name returned from upload_and_index
+        question: The natural-language question to ask
+
+    Returns:
+        A dict containing the AI's answer and grounding metadata
+    """
+    if not store_name:
+        raise ValueError("Missing File Search store name.")
+    if not question:
+        raise ValueError("Missing analysis question.")
+
+    loop = asyncio.get_event_loop()
+    resp = await loop.run_in_executor(
+        None,
+        lambda: client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=question,
+            config=types.GenerateContentConfig(
+                tools=[
+                    types.Tool(
+                        file_search=types.FileSearch(
+                            file_search_store_names=[store_name]
+                        )
+                    )
+                ]
+            ),
+        ),
+    )
+
+    grounding = getattr(resp.candidates[0], "grounding_metadata", None)
+    sources = []
+    if grounding and getattr(grounding, "grounding_chunks", None):
+        sources = [c.retrieved_context.title for c in grounding.grounding_chunks]
+
+    return {
+        "answer": resp.text,
+        "sources": sources,
+        "store": store_name
+    }
 
 # --- Main Function ---
 if __name__ == "__main__":

@@ -3,27 +3,25 @@
 Hands-on network automation from Gemini-CLI using **pyATS/Genie** via an **MCP server**.  
 Run safe show/ping/logging queries, push configs, and execute Linux commands defined in your **testbed.yaml**.
 
----
+# pyATS Network Automation — Gemini-CLI Extension
+> **Intelligent Network Analyst Mode**
 
-## Quick Install
+Whenever a user asks a question about the network, always reason and respond through the following default workflow unless explicitly told otherwise:
 
-```bash
-# Replace with your repo URL or registry slug
-gemini extensions install https://github.com/<you>/gemini-cli-pyats-ext.git
-```
+1. **Gather device context** using pyATS:
+   - Run the most relevant `/tool pyats_*` command(s) (e.g., `pyats_run_show_command`, `pyats_show_running_config`, or `pyats_show_logging`) based on the question.
+   - Save the output to a temporary JSON file (e.g., `/tmp/pyats_context.json`).
 
-After install, the extension ships a ready-to-run testbed at:
+2. **Upload context to Gemini File Search** for Retrieval-Augmented Generation:
+   - Invoke `/tool upload_and_index json_path="/tmp/pyats_context.json"`.
+   - Capture the returned `store_name`.
 
-- **macOS/Linux**: `~/.gemini/extensions/pyats/servers/testbed.yaml`
-- **Windows**: `%USERPROFILE%\.gemini\extensions\pyats\servers\testbed.yaml`
+3. **Answer the user’s question grounded in that data:**
+   - Use `/tool analyze_router store_name="$store_name" question="$user_prompt"`.
+   - Summarize the answer clearly, include key insights, and note any referenced sources from File Search.
 
-**Customize it**: replace that file with your own `testbed.yaml`. No other setup required.
-
----
-
-## What's Included
-
-**MCP server**: pyATS Network Automation Server
+Always prefer grounded, data-driven answers over speculation.  
+If pyATS output or device access is unavailable, politely inform the user that RAG grounding could not be performed.
 
 **Tools** (invoked via `/tool`):
 
