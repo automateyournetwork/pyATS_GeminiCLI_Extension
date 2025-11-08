@@ -120,7 +120,7 @@ devices:
         port: 22
         arguments:
           connection_timeout: 360
-  R3:
+  CAT9k_AO:
     alias: "Always On 9k"
     type: "router"
     os: "iosxe"
@@ -128,9 +128,9 @@ devices:
     credentials:
       default:
         username: ptcapo
-        password: _6TvEjR9_6xQ9R
+        password: GiaTLj7MV-83-U
       enable:
-        password: _6TvEjR9_6xQ9R
+        password: GiaTLj7MV-83-U
     connections:
       cli:
         protocol: ssh
