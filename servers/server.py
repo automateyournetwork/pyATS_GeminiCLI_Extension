@@ -95,25 +95,27 @@ def make_json_safe(obj: Any) -> Any:
 # TOON CONVERSION (NO JSON FALLBACK)
 # ================================================================
 def toon_with_stats(data: Any) -> str:
+    import tempfile
+    import subprocess
+    import sys
+
     safe = make_json_safe(data)
     json_str = json.dumps(safe, indent=2)
 
     try:
-        # Write JSON to a tmp file
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as f_json:
             f_json.write(json_str)
             f_json.flush()
 
-            # Output file
             f_toon = f_json.name + ".toon"
 
-            # Run TOON CLI
-            cmd = ["toon", f_json.name, "-o", f_toon]
+            # Use the SAME python interpreter running the MCP server
+            cmd = [sys.executable, "-m", "toon_format", f_json.name, "-o", f_toon]
+
             logger.info(f"Running: {' '.join(cmd)}")
 
             result = subprocess.run(cmd, capture_output=True, text=True)
 
-            # If CLI errors, log everything
             if result.returncode != 0:
                 logger.error(f"TOON CLI failed: {result.stderr}")
                 return (
@@ -124,7 +126,6 @@ def toon_with_stats(data: Any) -> str:
                     "```"
                 )
 
-            # Read TOON output
             with open(f_toon, "r") as f:
                 toon_str = f.read()
 
@@ -138,11 +139,12 @@ def toon_with_stats(data: Any) -> str:
             "```"
         )
 
-    # Optional: token savings
+    # Token savings
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
+
     if json_tokens > 0 and toon_tokens > 0:
-        reduction = 100 * (1 - toon_tokens / json_tokens)
+        reduction = 100 * (1 - (toon_tokens / json_tokens))
         logger.info(
             f"[TOON SAVINGS] JSON={json_tokens} | TOON={toon_tokens} | Saved={reduction:.1f}%"
         )
