@@ -70,7 +70,7 @@ def toon_with_stats(data: dict) -> str:
         toon_str = toon_encode(data, keyFolding="safe", indent=2)
     except Exception as e:
         logger.error(f"TOON conversion failed: {e}", exc_info=True)
-        return f"```json\n{json_str}\n```"
+        return f"@@TOON@@\n```json\n{json_str}\n```"
 
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
@@ -81,12 +81,11 @@ def toon_with_stats(data: dict) -> str:
             f"[TOON SAVINGS] JSON tokens: {json_tokens} | "
             f"TOON tokens: {toon_tokens} | Savings: {reduction:.1f}%"
         )
-    else:
-        logger.info("[TOON SAVINGS] (tokenizer unavailable)")
 
     logger.info("\n[TOON OUTPUT]\n" + toon_str + "\n")
 
-    return f"```toon\n{toon_str}\n```"
+    # THE FIX: prefix forces Gemini to treat as raw text
+    return f"@@TOON@@\n```toon\n{toon_str}\n```"
 
 # ---------------------------
 # Device Connection Helpers
@@ -306,7 +305,7 @@ def _execute_linux_command(device_name: str, command: str):
 mcp = FastMCP("pyATS Network Automation Server")
 
 
-@mcp.tool(return_text=True)
+@mcp.tool()
 async def pyats_run_show_command(device_name: str, command: str) -> str:
     return toon_with_stats(await run_show_command_async(device_name, command))
 
@@ -326,12 +325,12 @@ async def pyats_show_logging(device_name: str) -> str:
     return toon_with_stats(await execute_learn_logging_async(device_name))
 
 
-@mcp.tool(return_text=True)
+@mcp.tool()
 async def pyats_ping_from_network_device(device_name: str, command: str) -> str:
     return toon_with_stats(await run_ping_command_async(device_name, command))
 
 
-@mcp.tool(return_text=True)
+@mcp.tool()
 async def pyats_run_linux_command(device_name: str, command: str) -> str:
     return toon_with_stats(await run_linux_command_async(device_name, command))
 
