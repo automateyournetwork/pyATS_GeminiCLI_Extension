@@ -10,19 +10,12 @@ import textwrap
 from pyats.topology import loader
 from genie.libs.parser.utils import get_parser
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
 from typing import Dict, Any
 import asyncio
 from functools import partial
-import mcp.types as types
 from mcp.server.fastmcp import FastMCP
-from google import genai
-from google.genai import types as gtypes
 from toon_format import encode as toon_encode
 import tiktoken
-
-# Initialize Gemini client
-client = genai.Client()
 
 # --- Logging ---
 logging.basicConfig(
@@ -335,78 +328,6 @@ async def pyats_ping_from_network_device(device_name: str, command: str) -> str:
 @mcp.tool()
 async def pyats_run_linux_command(device_name: str, command: str) -> str:
     return toon_with_stats(await run_linux_command_async(device_name, command))
-
-
-# ---------------------------
-# File Search Tools
-# ---------------------------
-
-# @mcp.tool()
-# async def upload_and_index(json_path: str) -> str:
-#     """Upload a file to Gemini File Search."""
-#     import os
-
-#     if not os.path.exists(json_path):
-#         raise FileNotFoundError(json_path)
-
-#     store = client.file_search_stores.create(
-#         config={"display_name": f"pyats_store"}
-#     )
-#     store_name = store.name
-
-#     op = client.file_search_stores.upload_to_file_search_store(
-#         file_search_store_name=store_name,
-#         file=json_path,
-#         config={
-#             "display_name": os.path.basename(json_path),
-#             "mime_type": "text/plain",
-#             "chunking_config": {
-#                 "white_space_config": {
-#                     "max_tokens_per_chunk": 500,
-#                     "max_overlap_tokens": 100,
-#                 }
-#             },
-#         },
-#     )
-
-#     # Poll
-#     op_name = op.name
-#     for _ in range(60):
-#         curr = client.operations.get(op_name)
-#         if curr.done:
-#             break
-#         await asyncio.sleep(2)
-
-#     return store_name
-
-
-# @mcp.tool()
-# async def analyze_router(store_name: str, question: str) -> dict:
-#     """Ask Gemini 2.5 Flash with File Search grounding."""
-#     resp = client.models.generate_content(
-#         model="gemini-2.5-flash",
-#         contents=question,
-#         config=gtypes.GenerateContentConfig(
-#             tools=[
-#                 gtypes.Tool(
-#                     file_search=gtypes.FileSearch(
-#                         file_search_store_names=[store_name]
-#                     )
-#                 )
-#             ]
-#         ),
-#     )
-
-#     grounding = resp.candidates[0].grounding_metadata
-#     sources = []
-#     if grounding and grounding.grounding_chunks:
-#         sources = [c.retrieved_context.title for c in grounding.grounding_chunks]
-
-#     return {
-#         "answer": resp.text,
-#         "sources": sources,
-#         "store": store_name,
-#     }
 
 
 # ---------------------------

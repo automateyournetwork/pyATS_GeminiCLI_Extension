@@ -20,4 +20,4 @@ if [ -f "$SERVERS_DIR/requirements.txt" ]; then
 fi
 
 # 3) Exec the MCP server (this must be the ONLY thing that writes to STDOUT)
-exec "$VENV/bin/python3" "$SERVERS_DIR/pyats_mcp_server.py"
+exec "$VENV/bin/python3" "$SERVERS_DIR/server.py"
