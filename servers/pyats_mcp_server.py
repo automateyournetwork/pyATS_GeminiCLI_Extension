@@ -27,8 +27,10 @@ client = genai.Client()
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
+    stream=sys.stderr,  # <-- CRITICAL FIX
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
 logger = logging.getLogger("PyATSFastMCPServer")
 
 # --- Load ENV ---
