@@ -93,8 +93,10 @@ def toon_with_stats(data: Any) -> str:
     safe = make_json_safe(data)
     json_str = json.dumps(safe, indent=2)
 
+    # ------------------------------------------------------------------
+    # Run TOON CLI via NPX
+    # ------------------------------------------------------------------
     try:
-        # temp JSON file
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as f_json:
             f_json.write(json_str)
             f_json.flush()
@@ -102,12 +104,12 @@ def toon_with_stats(data: Any) -> str:
             dst = f_json.name + ".toon"
 
         cmd = ["npx", "@toon-format/cli", src, "-o", dst]
+        # Note: Gemini will not show this log because it's INFO
         logger.info(f"[TOON] Running: {' '.join(cmd)}")
 
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
-            logger.error(f"❌ TOON CLI failed:\n{result.stderr}")
             return (
                 "```error\n"
                 f"TOON CLI failed:\n{result.stderr}\n\n"
@@ -120,7 +122,6 @@ def toon_with_stats(data: Any) -> str:
             toon_str = f.read()
 
     except Exception as e:
-        logger.error("❌ TOON subprocess error", exc_info=True)
         return (
             "```error\n"
             f"TOON subprocess error:\n{e}\n\n"
@@ -129,17 +130,27 @@ def toon_with_stats(data: Any) -> str:
             "```"
         )
 
-    # token savings
+    # ------------------------------------------------------------------
+    # Token savings (FORCED INTO TOOL OUTPUT)
+    # ------------------------------------------------------------------
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
+
     if json_tokens > 0 and toon_tokens > 0:
         reduction = 100 * (1 - (toon_tokens / json_tokens))
-        logger.info(
-            f"[TOON SAVINGS] JSON={json_tokens}  |  TOON={toon_tokens}  |  Saved={reduction:.1f}%"
+        savings_text = (
+            f"\n\n# Token Savings\n"
+            f"- JSON tokens: {json_tokens}\n"
+            f"- TOON tokens: {toon_tokens}\n"
+            f"- Saved: {reduction:.1f}%\n"
         )
+    else:
+        savings_text = "\n\n# Token Savings\n(unavailable)\n"
 
-    return f"```toon\n{toon_str}\n```"
-
+    # ------------------------------------------------------------------
+    # Return TOON + savings info bundled together
+    # ------------------------------------------------------------------
+    return f"```toon\n{toon_str}\n```{savings_text}"
 
 # ================================================================
 # PYATS DEVICE HELPERS
