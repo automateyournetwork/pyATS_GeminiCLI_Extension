@@ -95,25 +95,54 @@ def make_json_safe(obj: Any) -> Any:
 def toon_with_stats(data: Any) -> str:
     """
     Convert result → TOON.
-    NEVER fall back to JSON.
-    If TOON fails → return error block.
+    Debug version: logs EVERYTHING to STDERR if something weird happens.
     """
+
+    # 1) SHOW RAW pyATS/GENIE OBJECT
+    logger.debug("=== RAW pyATS DATA START ===")
+    logger.debug(repr(data))
+    logger.debug("=== RAW pyATS DATA END ===")
+
+    # 2) SANITIZE FOR JSON/TOON
     safe = make_json_safe(data)
+
+    logger.debug("=== JSON-SAFE DATA (safe) START ===")
+    logger.debug(json.dumps(safe, indent=2))
+    logger.debug("=== JSON-SAFE DATA END ===")
+
     json_str = json.dumps(safe, indent=2)
 
+    # 3) ATTEMPT TOON ENCODE
     try:
-        toon_str = toon_encode(safe, keyFolding="safe", indent=2)
+        logger.debug("=== ATTEMPTING TOON ENCODE NOW ===")
+        toon_str = toon_encode(safe, indent=2)
+
+        logger.debug("=== RAW TOON ENCODE OUTPUT START ===")
+        logger.debug(toon_str)
+        logger.debug("=== RAW TOON ENCODE OUTPUT END ===")
+
     except Exception as e:
-        logger.error("❌ TOON conversion failed", exc_info=True)
+        logger.error("❌ TOON CONVERSION FAILURE", exc_info=True)
+
+        # ★★ NEW: LOG ALL CONTEXT ★★
+        logger.error("⚠ SAFE JSON STRING BELOW:")
+        logger.error(json_str)
+
+        logger.error("⚠ TYPE OF SAFE OBJECT:")
+        logger.error(str(type(safe)))
+
+        # Give TOON full error block
         return (
             "```error\n"
-            f"TOON conversion failed:\n{e}\n"
-            "Original JSON:\n"
+            f"TOON conversion failed:\n{e}\n\n"
+            "TYPE OF SAFE OBJECT:\n"
+            f"{type(safe)}\n\n"
+            "JSON-SAFE REPRESENTATION:\n"
             f"{json_str}\n"
             "```"
         )
 
-    # Token savings
+    # 4) Token savings (optional)
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
     if json_tokens > 0 and toon_tokens > 0:
@@ -122,11 +151,8 @@ def toon_with_stats(data: Any) -> str:
             f"[TOON SAVINGS] JSON={json_tokens} | TOON={toon_tokens} | Saved={reduction:.1f}%"
         )
 
-    logger.info("\n[TOON OUTPUT]\n" + toon_str)
-
-    # ALWAYS return a pure string
+    # 5) Return fenced TOON
     return f"```toon\n{toon_str}\n```"
-
 
 # ================================================================
 # pyATS Device Helpers
