@@ -97,7 +97,6 @@ def make_json_safe(obj: Any) -> Any:
 def toon_with_stats(data: Any) -> str:
     import tempfile
     import subprocess
-    import sys
 
     safe = make_json_safe(data)
     json_str = json.dumps(safe, indent=2)
@@ -109,9 +108,8 @@ def toon_with_stats(data: Any) -> str:
 
             f_toon = f_json.name + ".toon"
 
-            # Use the SAME python interpreter running the MCP server
-            cmd = [sys.executable, "-m", "toon_format", f_json.name, "-o", f_toon]
-
+            # Use Node-based CLI for TOON
+            cmd = ["npx", "@toon-format/cli", f_json.name, "-o", f_toon]
             logger.info(f"Running: {' '.join(cmd)}")
 
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -142,7 +140,6 @@ def toon_with_stats(data: Any) -> str:
     # Token savings
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
-
     if json_tokens > 0 and toon_tokens > 0:
         reduction = 100 * (1 - (toon_tokens / json_tokens))
         logger.info(

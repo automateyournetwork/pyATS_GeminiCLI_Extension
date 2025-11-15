@@ -7,6 +7,19 @@ VENV="$SERVERS_DIR/pyATSmcp"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 export PYATS_TESTBED_PATH="$SERVERS_DIR/testbed.yaml"
 
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+#  MAKE NODE + NPX AVAILABLE INSIDE MCP SERVER
+# >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+# Add common Node install locations to PATH
+export PATH="$PATH:/usr/bin:/usr/local/bin:$HOME/bin:$HOME/.nvm/versions/node/v*/bin"
+# ^ This catches:
+#   /usr/bin/node
+#   /usr/local/bin/node
+#   Homebrew installs
+#   NVM installs (any version)
+#   Windows WSL installs
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 if [ ! -x "$VENV/bin/python3" ]; then
   echo "[pyATS] creating venv at $VENV" >&2
   "$PYTHON_BIN" -m venv "$VENV" 1>&2
