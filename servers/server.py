@@ -17,8 +17,10 @@ import asyncio
 from functools import partial
 
 from mcp.server.fastmcp import FastMCP
-from toon_format import encode as toon_encode
 import tiktoken
+import subprocess
+import tempfile
+
 
 # ================================================================
 # Logging (important: STDERR only — STDOUT reserved for MCP)
@@ -93,65 +95,58 @@ def make_json_safe(obj: Any) -> Any:
 # TOON CONVERSION (NO JSON FALLBACK)
 # ================================================================
 def toon_with_stats(data: Any) -> str:
-    """
-    Convert result → TOON.
-    Debug version: logs EVERYTHING to STDERR if something weird happens.
-    """
-
-    # 1) SHOW RAW pyATS/GENIE OBJECT
-    logger.debug("=== RAW pyATS DATA START ===")
-    logger.debug(repr(data))
-    logger.debug("=== RAW pyATS DATA END ===")
-
-    # 2) SANITIZE FOR JSON/TOON
     safe = make_json_safe(data)
+    json_str = json.dumps(safe, indent=2)
 
-    logger.debug("=== JSON-SAFE DATA (safe) START ===")
-    logger.debug(json.dumps(safe))
-    logger.debug("=== JSON-SAFE DATA END ===")
-
-    json_str = json.dumps(safe)
-
-    # 3) ATTEMPT TOON ENCODE
     try:
-        logger.debug("=== ATTEMPTING TOON ENCODE NOW ===")
-        toon_str = toon_encode(safe)
+        # Write JSON to a tmp file
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as f_json:
+            f_json.write(json_str)
+            f_json.flush()
 
-        logger.debug("=== RAW TOON ENCODE OUTPUT START ===")
-        logger.debug(toon_str)
-        logger.debug("=== RAW TOON ENCODE OUTPUT END ===")
+            # Output file
+            f_toon = f_json.name + ".toon"
+
+            # Run TOON CLI
+            cmd = ["toon", f_json.name, "-o", f_toon]
+            logger.info(f"Running: {' '.join(cmd)}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            # If CLI errors, log everything
+            if result.returncode != 0:
+                logger.error(f"TOON CLI failed: {result.stderr}")
+                return (
+                    "```error\n"
+                    f"TOON CLI failed:\n{result.stderr}\n\n"
+                    "JSON OUTPUT:\n"
+                    f"{json_str}\n"
+                    "```"
+                )
+
+            # Read TOON output
+            with open(f_toon, "r") as f:
+                toon_str = f.read()
 
     except Exception as e:
-        logger.error("❌ TOON CONVERSION FAILURE", exc_info=True)
-
-        # ★★ NEW: LOG ALL CONTEXT ★★
-        logger.error("⚠ SAFE JSON STRING BELOW:")
-        logger.error(json_str)
-
-        logger.error("⚠ TYPE OF SAFE OBJECT:")
-        logger.error(str(type(safe)))
-
-        # Give TOON full error block
+        logger.error("TOON subprocess error", exc_info=True)
         return (
             "```error\n"
-            f"TOON conversion failed:\n{e}\n\n"
-            "TYPE OF SAFE OBJECT:\n"
-            f"{type(safe)}\n\n"
-            "JSON-SAFE REPRESENTATION:\n"
+            f"TOON subprocess error:\n{e}\n\n"
+            "JSON OUTPUT:\n"
             f"{json_str}\n"
             "```"
         )
 
-    # 4) Token savings (optional)
+    # Optional: token savings
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
     if json_tokens > 0 and toon_tokens > 0:
-        reduction = 100 * (1 - (toon_tokens / json_tokens))
+        reduction = 100 * (1 - toon_tokens / json_tokens)
         logger.info(
             f"[TOON SAVINGS] JSON={json_tokens} | TOON={toon_tokens} | Saved={reduction:.1f}%"
         )
 
-    # 5) Return fenced TOON
     return f"```toon\n{toon_str}\n```"
 
 # ================================================================
