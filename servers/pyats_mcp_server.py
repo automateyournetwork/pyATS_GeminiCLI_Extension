@@ -64,19 +64,14 @@ def count_tokens(text: str) -> int:
 
 # --- TOON Conversion w/Stats ---
 def toon_with_stats(data: dict) -> str:
-    """
-    Converts JSON → TOON, prints TOON to console,
-    prints token savings, and returns TOON to client.
-    """
     json_str = json.dumps(data, indent=2)
 
     try:
         toon_str = toon_encode(data, keyFolding="safe", indent=2)
     except Exception as e:
         logger.error(f"TOON conversion failed: {e}", exc_info=True)
-        return json_str
+        return f"```json\n{json_str}\n```"
 
-    # Token counts
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
 
@@ -89,11 +84,9 @@ def toon_with_stats(data: dict) -> str:
     else:
         logger.info("[TOON SAVINGS] (tokenizer unavailable)")
 
-    # Print TOON to console
     logger.info("\n[TOON OUTPUT]\n" + toon_str + "\n")
 
-    return toon_str
-
+    return f"```toon\n{toon_str}\n```"
 
 # ---------------------------
 # Device Connection Helpers
