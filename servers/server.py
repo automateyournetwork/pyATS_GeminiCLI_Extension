@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # pyats_fastmcp_server.py
 
 import os
@@ -7,29 +8,36 @@ import sys
 import json
 import logging
 import textwrap
+from typing import Dict, Any
+
 from pyats.topology import loader
 from genie.libs.parser.utils import get_parser
 from dotenv import load_dotenv
-from typing import Dict, Any
 import asyncio
 from functools import partial
+
 from mcp.server.fastmcp import FastMCP
 from toon_format import encode as toon_encode
 import tiktoken
 
-# --- Logging ---
+# ---------------------------
+# Logging
+# ---------------------------
+
 logging.basicConfig(
     level=logging.INFO,
-    stream=sys.stderr,  # <-- CRITICAL FIX
+    stream=sys.stderr,  # IMPORTANT: all logs to stderr, FastMCP uses stdout
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-
 logger = logging.getLogger("PyATSFastMCPServer")
 
-# --- Load ENV ---
-load_dotenv()
-TESTBED_PATH = os.getenv("PYATS_TESTBED_PATH")
+# ---------------------------
+# ENV / Testbed
+# ---------------------------
 
+load_dotenv()
+
+TESTBED_PATH = os.getenv("PYATS_TESTBED_PATH")
 if not TESTBED_PATH or not os.path.exists(TESTBED_PATH):
     logger.critical(
         f"❌ CRITICAL: PYATS_TESTBED_PATH missing or invalid: {TESTBED_PATH}"
@@ -38,7 +46,10 @@ if not TESTBED_PATH or not os.path.exists(TESTBED_PATH):
 
 logger.info(f"✅ Using testbed file: {TESTBED_PATH}")
 
-# --- Tokenizer initialization ---
+# ---------------------------
+# Tokenizer (for savings stats)
+# ---------------------------
+
 try:
     tokenizer = tiktoken.get_encoding("o200k_base")
     logger.info("🧮 Loaded GPT o200k_base tokenizer for token savings reporting")
@@ -57,15 +68,57 @@ def count_tokens(text: str) -> int:
         return -1
 
 
-# --- TOON Conversion w/Stats ---
-def toon_with_stats(data: dict) -> str:
-    json_str = json.dumps(data, indent=2)
+# ---------------------------
+# JSON-safe sanitizer for TOON
+# ---------------------------
+
+def make_json_safe(obj: Any) -> Any:
+    """
+    Normalize pyATS / genie structures into JSON-safe types
+    so toon_format.encode() doesn't explode on sets, AttrDicts, etc.
+    """
+    # dict / AttrDict / subclasses
+    if isinstance(obj, dict):
+        return {str(k): make_json_safe(v) for k, v in obj.items()}
+
+    # lists / tuples
+    if isinstance(obj, (list, tuple)):
+        return [make_json_safe(v) for v in obj]
+
+    # sets → sorted list
+    if isinstance(obj, set):
+        return [make_json_safe(v) for v in sorted(obj, key=lambda x: str(x))]
+
+    # Objects with __dict__ (fallback)
+    if hasattr(obj, "__dict__"):
+        return make_json_safe(obj.__dict__)
+
+    # Primitives or already serializable
+    try:
+        json.dumps(obj)
+        return obj
+    except Exception:
+        return str(obj)
+
+
+# ---------------------------
+# TOON Conversion w/Stats
+# ---------------------------
+
+def toon_with_stats(data: Any) -> str:
+    """
+    Convert pyATS result to TOON, log savings, and return a fenced ```toon block.
+    If TOON fails, return JSON fenced instead.
+    """
+    safe = make_json_safe(data)
+    json_str = json.dumps(safe, indent=2)
 
     try:
-        toon_str = toon_encode(data, keyFolding="safe", indent=2)
+        toon_str = toon_encode(safe, keyFolding="safe", indent=2)
     except Exception as e:
         logger.error(f"TOON conversion failed: {e}", exc_info=True)
-        return f"@@TOON@@\n```json\n{json_str}\n```"
+        # Fallback: plain JSON so you still see data
+        return f"```json\n{json_str}\n```"
 
     json_tokens = count_tokens(json_str)
     toon_tokens = count_tokens(toon_str)
@@ -79,8 +132,9 @@ def toon_with_stats(data: dict) -> str:
 
     logger.info("\n[TOON OUTPUT]\n" + toon_str + "\n")
 
-    # THE FIX: prefix forces Gemini to treat as raw text
-    return "```toon\n" + toon_str + "\n```"
+    # Return TOON as a Markdown fenced block
+    return f"```toon\n{toon_str}\n```"
+
 
 # ---------------------------
 # Device Connection Helpers
