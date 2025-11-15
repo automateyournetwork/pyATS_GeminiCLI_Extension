@@ -107,7 +107,7 @@ def toon_with_stats(data: Any) -> str:
     safe = make_json_safe(data)
 
     logger.debug("=== JSON-SAFE DATA (safe) START ===")
-    logger.debug(json.dumps(safe)
+    logger.debug(json.dumps(safe))
     logger.debug("=== JSON-SAFE DATA END ===")
 
     json_str = json.dumps(safe)
