@@ -4,4 +4,4 @@ pydantic
 python-dotenv
 google-genai
 toon-format
-gpt-tokenizer
+tiktoken

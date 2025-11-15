@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 from google import genai
 from google.genai import types as gtypes
 from toon_format import encode as toon_encode
-from gpt_tokenizer import GPTTokenizer
+import tiktoken
 
 # Initialize Gemini client
 client = genai.Client()
@@ -45,7 +45,7 @@ logger.info(f"✅ Using testbed file: {TESTBED_PATH}")
 
 # --- Tokenizer initialization ---
 try:
-    tokenizer = GPTTokenizer("o200k_base")
+    tokenizer = tiktoken.get_encoding("o200k_base")
     logger.info("🧮 Loaded GPT o200k_base tokenizer for token savings reporting")
 except Exception as e:
     logger.warning(f"⚠ GPT tokenizer unavailable: {e}")
