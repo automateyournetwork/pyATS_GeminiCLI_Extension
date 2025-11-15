@@ -10,468 +10,355 @@ import textwrap
 from pyats.topology import loader
 from genie.libs.parser.utils import get_parser
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, ValidationError
-from typing import Dict, Any, Optional
+from pydantic import BaseModel, Field
+from typing import Dict, Any
 import asyncio
 from functools import partial
 import mcp.types as types
 from mcp.server.fastmcp import FastMCP
 from google import genai
-from google.genai import types
+from google.genai import types as gtypes
+from toon_format import encode as toon_encode
+from gpt_tokenizer import GPTTokenizer
 
+# Initialize Gemini client
 client = genai.Client()
 
-# --- Basic Logging Setup ---
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("PyatsFastMCPServer")
+# --- Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("PyATSFastMCPServer")
 
-# --- Load Environment Variables ---
+# --- Load ENV ---
 load_dotenv()
 TESTBED_PATH = os.getenv("PYATS_TESTBED_PATH")
 
 if not TESTBED_PATH or not os.path.exists(TESTBED_PATH):
-    logger.critical(f"❌ CRITICAL: PYATS_TESTBED_PATH environment variable not set or file not found: {TESTBED_PATH}")
+    logger.critical(
+        f"❌ CRITICAL: PYATS_TESTBED_PATH missing or invalid: {TESTBED_PATH}"
+    )
     sys.exit(1)
 
 logger.info(f"✅ Using testbed file: {TESTBED_PATH}")
 
-# --- Pydantic Models for Input Validation ---
-class DeviceCommandInput(BaseModel):
-    device_name: str = Field(..., description="The name of the device in the testbed.")
-    command: str = Field(..., description="The command to execute (e.g., 'show ip interface brief', 'ping 8.8.8.8').")
+# --- Tokenizer initialization ---
+try:
+    tokenizer = GPTTokenizer("o200k_base")
+    logger.info("🧮 Loaded GPT o200k_base tokenizer for token savings reporting")
+except Exception as e:
+    logger.warning(f"⚠ GPT tokenizer unavailable: {e}")
+    tokenizer = None
 
-class ConfigInput(BaseModel):
-    device_name: str = Field(..., description="The name of the device in the testbed.")
-    config_commands: str = Field(..., description="Single or multi-line configuration commands.")
 
-class DeviceOnlyInput(BaseModel):
-    device_name: str = Field(..., description="The name of the device in the testbed.")
+def count_tokens(text: str) -> int:
+    """Return token count using GPT o200k_base tokenizer."""
+    if tokenizer is None:
+        return -1
+    try:
+        return len(tokenizer.encode(text))
+    except Exception:
+        return -1
 
-class LinuxCommandInput(BaseModel):
-    device_name: str = Field(..., description="The name of the Linux device in the testbed.")
-    command: str = Field(..., description="Linux command to execute (e.g., 'ifconfig', 'ls -l /home')")
 
-# --- Core pyATS Helper Functions ---
+# --- TOON Conversion w/Stats ---
+def toon_with_stats(data: dict) -> str:
+    """
+    Converts JSON → TOON, prints TOON to console,
+    prints token savings, and returns TOON to client.
+    """
+    json_str = json.dumps(data, indent=2)
+
+    try:
+        toon_str = toon_encode(data, keyFolding="safe", indent=2)
+    except Exception as e:
+        logger.error(f"TOON conversion failed: {e}", exc_info=True)
+        return json_str
+
+    # Token counts
+    json_tokens = count_tokens(json_str)
+    toon_tokens = count_tokens(toon_str)
+
+    if json_tokens > 0 and toon_tokens > 0:
+        reduction = 100 * (1 - (toon_tokens / json_tokens))
+        logger.info(
+            f"[TOON SAVINGS] JSON tokens: {json_tokens} | "
+            f"TOON tokens: {toon_tokens} | Savings: {reduction:.1f}%"
+        )
+    else:
+        logger.info("[TOON SAVINGS] (tokenizer unavailable)")
+
+    # Print TOON to console
+    logger.info("\n[TOON OUTPUT]\n" + toon_str + "\n")
+
+    return toon_str
+
+
+# ---------------------------
+# Device Connection Helpers
+# ---------------------------
 
 def _get_device(device_name: str):
-    """Helper to load testbed and get/connect to a device."""
+    """Load testbed and return connected device."""
     try:
         testbed = loader.load(TESTBED_PATH)
         device = testbed.devices.get(device_name)
+
         if not device:
-            raise ValueError(f"Device '{device_name}' not found in testbed '{TESTBED_PATH}'.")
+            raise ValueError(f"Device '{device_name}' not found in {TESTBED_PATH}")
 
         if not device.is_connected():
-            logger.info(f"Connecting to {device_name}...")
+            logger.info(f"🔌 Connecting to {device_name}...")
             device.connect(
                 connection_timeout=120,
                 learn_hostname=True,
                 log_stdout=False,
-                mit=True
+                mit=True,
             )
-            logger.info(f"Connected to {device_name}")
+            logger.info(f"✅ Connected to {device_name}")
 
         return device
 
     except Exception as e:
-        logger.error(f"Error getting/connecting to device {device_name}: {e}", exc_info=True)
+        logger.error(f"Connection error on {device_name}: {e}", exc_info=True)
         raise
 
+
 def _disconnect_device(device):
-    """Helper to safely disconnect."""
+    """Safely disconnect."""
     if device and device.is_connected():
-        logger.info(f"Disconnecting from {device.name}...")
         try:
+            logger.info(f"🔌 Disconnecting from {device.name}...")
             device.disconnect()
-            logger.info(f"Disconnected from {device.name}")
         except Exception as e:
-            logger.warning(f"Error disconnecting from {device.name}: {e}")
+            logger.warning(f"Disconnect error on {device.name}: {e}")
+
 
 def clean_output(output: str) -> str:
-    """Clean ANSI escape sequences and non-printable characters."""
-    # Remove ANSI escape sequences
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    output = ansi_escape.sub('', output)
-    
-    # Remove non-printable control characters
-    output = ''.join(char for char in output if char in string.printable)
-    
-    return output
+    """Strip ANSI and non-printable chars."""
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    output = ansi_escape.sub("", output)
+    return "".join(c for c in output if c in string.printable)
 
-# --- Core pyATS Functions ---
+
+# ---------------------------
+# pyATS Async Command Runners
+# ---------------------------
 
 async def run_show_command_async(device_name: str, command: str) -> Dict[str, Any]:
-    """Execute a show command on a device."""
-    device = None
-    try:
-        # Validate command
-        disallowed_modifiers = ['|', 'include', 'exclude', 'begin', 'redirect', '>', '<', 'config', 'copy', 'delete', 'erase', 'reload', 'write']
-        command_lower = command.lower().strip()
-        
-        if not command_lower.startswith("show"):
-            return {"status": "error", "error": f"Command '{command}' is not a 'show' command."}
-        
-        for part in command_lower.split():
-            if part in disallowed_modifiers:
-                return {"status": "error", "error": f"Command '{command}' contains disallowed term '{part}'."}
+    """Run show command safely."""
+    disallowed = [
+        "|", "include", "exclude", "begin",
+        "redirect", ">", "<", "config",
+        "copy", "delete", "erase", "reload", "write"
+    ]
 
-        # Execute in thread to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(_execute_show_command, device_name, command))
-        return result
+    cmd = command.lower().strip()
+    if not cmd.startswith("show"):
+        return {"status": "error", "error": "Only 'show' commands allowed"}
 
-    except Exception as e:
-        logger.error(f"Error in run_show_command_async: {e}", exc_info=True)
-        return {"status": "error", "error": f"Execution error: {e}"}
+    if any(bad in cmd.split() for bad in disallowed):
+        return {"status": "error", "error": f"Disallowed modifier in '{command}'"}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_execute_show_command, device_name, command))
+
 
 def _execute_show_command(device_name: str, command: str) -> Dict[str, Any]:
-    """Synchronous helper for show command execution."""
     device = None
     try:
         device = _get_device(device_name)
-        
+
         try:
-            logger.info(f"Attempting to parse command: '{command}' on {device_name}")
-            parsed_output = device.parse(command)
-            logger.info(f"Successfully parsed output for '{command}' on {device_name}")
-            return {"status": "completed", "device": device_name, "output": parsed_output}
+            parsed = device.parse(command)
+            return {"status": "completed", "device": device_name, "output": parsed}
         except Exception as parse_exc:
-            logger.warning(f"Parsing failed for '{command}' on {device_name}: {parse_exc}. Falling back to execute.")
-            raw_output = device.execute(command)
-            logger.info(f"Executed command (fallback): '{command}' on {device_name}")
-            return {"status": "completed_raw", "device": device_name, "output": raw_output}
-            
+            logger.warning(f"Parse failed → fallback execute: {parse_exc}")
+            raw = device.execute(command)
+            return {"status": "completed_raw", "device": device_name, "output": raw}
+
     except Exception as e:
-        logger.error(f"Error executing show command: {e}", exc_info=True)
-        return {"status": "error", "error": f"Execution error: {e}"}
+        return {"status": "error", "error": str(e)}
     finally:
         _disconnect_device(device)
 
-async def apply_device_configuration_async(device_name: str, config_commands: str) -> Dict[str, Any]:
-    """Apply configuration to a device."""
-    try:
-        # Safety check
-        if "erase" in config_commands.lower() or "write erase" in config_commands.lower():
-            logger.warning(f"Rejected potentially dangerous command on {device_name}: {config_commands}")
-            return {"status": "error", "error": "Potentially dangerous command detected (erase). Operation aborted."}
 
-        # Execute in thread to avoid blocking
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(_execute_config, device_name, config_commands))
-        return result
+async def apply_device_configuration_async(device_name: str, config_commands: str):
+    if "erase" in config_commands.lower():
+        return {"status": "error", "error": "Dangerous 'erase' detected"}
 
-    except Exception as e:
-        logger.error(f"Error in apply_device_configuration_async: {e}", exc_info=True)
-        return {"status": "error", "error": f"Configuration error: {e}"}
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_execute_config, device_name, config_commands))
 
-def _execute_config(device_name: str, config_commands: str) -> Dict[str, Any]:
-    """Synchronous helper for configuration application."""
+
+def _execute_config(device_name: str, config_commands: str):
     device = None
     try:
         device = _get_device(device_name)
-        
-        cleaned_config = textwrap.dedent(config_commands.strip())
-        if not cleaned_config:
-            return {"status": "error", "error": "Empty configuration provided."}
-
-        logger.info(f"Applying configuration on {device_name}:\n{cleaned_config}")
-        output = device.configure(cleaned_config)
-        logger.info(f"Configuration result on {device_name}: {output}")
-        return {"status": "success", "message": f"Configuration applied on {device_name}.", "output": output}
+        cleaned = textwrap.dedent(config_commands.strip())
+        out = device.configure(cleaned)
+        return {"status": "success", "device": device_name, "output": out}
 
     except Exception as e:
-        logger.error(f"Error applying configuration: {e}", exc_info=True)
-        return {"status": "error", "error": f"Configuration error: {e}"}
+        return {"status": "error", "error": str(e)}
     finally:
         _disconnect_device(device)
 
-async def execute_learn_config_async(device_name: str) -> Dict[str, Any]:
-    """Learn device configuration."""
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(_execute_learn_config, device_name))
-        return result
-    except Exception as e:
-        logger.error(f"Error in execute_learn_config_async: {e}", exc_info=True)
-        return {"status": "error", "error": f"Error learning config: {e}"}
 
-def _execute_learn_config(device_name: str) -> Dict[str, Any]:
-    """Synchronous helper for learning configuration."""
+async def execute_learn_config_async(device_name: str):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_execute_learn_config, device_name))
+
+
+def _execute_learn_config(device_name: str):
     device = None
     try:
         device = _get_device(device_name)
-        logger.info(f"Learning configuration from {device_name}...")
-        
-        device.enable()
-        raw_output = device.execute("show run brief")
-        cleaned_output = clean_output(raw_output)
-        
-        logger.info(f"Successfully learned config from {device_name}")
+        raw = device.execute("show run brief")
         return {
             "status": "completed_raw",
             "device": device_name,
-            "output": {"raw_output": cleaned_output}
+            "output": {"raw_output": clean_output(raw)},
         }
     except Exception as e:
-        logger.error(f"Error learning config: {e}", exc_info=True)
-        return {"status": "error", "error": f"Error learning config: {e}"}
+        return {"status": "error", "error": str(e)}
     finally:
         _disconnect_device(device)
 
-async def execute_learn_logging_async(device_name: str) -> Dict[str, Any]:
-    """Learn device logging."""
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(_execute_learn_logging, device_name))
-        return result
-    except Exception as e:
-        logger.error(f"Error in execute_learn_logging_async: {e}", exc_info=True)
-        return {"status": "error", "error": f"Error learning logs: {e}"}
 
-def _execute_learn_logging(device_name: str) -> Dict[str, Any]:
-    """Synchronous helper for learning logging."""
+async def execute_learn_logging_async(device_name: str):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_execute_learn_logging, device_name))
+
+
+def _execute_learn_logging(device_name: str):
     device = None
     try:
         device = _get_device(device_name)
-        logger.info(f"Learning logging output from {device_name}...")
-        
-        raw_output = device.execute("show logging last 250")
-        logger.info(f"Successfully learned logs from {device_name}")
-        
+        raw = device.execute("show logging last 250")
         return {
             "status": "completed_raw",
             "device": device_name,
-            "output": {"raw_output": raw_output}
+            "output": {"raw_output": raw},
         }
     except Exception as e:
-        logger.error(f"Error learning logs: {e}", exc_info=True)
-        return {"status": "error", "error": f"Error learning logs: {e}"}
+        return {"status": "error", "error": str(e)}
     finally:
         _disconnect_device(device)
 
-async def run_ping_command_async(device_name: str, command: str) -> Dict[str, Any]:
-    """Execute a ping command on a device."""
-    try:
-        if not command.lower().strip().startswith("ping"):
-            return {"status": "error", "error": f"Command '{command}' is not a 'ping' command."}
-        
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(_execute_ping, device_name, command))
-        return result
-    except Exception as e:
-        logger.error(f"Error in run_ping_command_async: {e}", exc_info=True)
-        return {"status": "error", "error": f"Ping execution error: {e}"}
 
-def _execute_ping(device_name: str, command: str) -> Dict[str, Any]:
-    """Synchronous helper for ping execution."""
+async def run_ping_command_async(device_name: str, command: str):
+    if not command.lower().strip().startswith("ping"):
+        return {"status": "error", "error": "Only 'ping' commands allowed"}
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_execute_ping, device_name, command))
+
+
+def _execute_ping(device_name: str, command: str):
     device = None
     try:
         device = _get_device(device_name)
-        logger.info(f"Executing ping: '{command}' on {device_name}")
-        
         try:
-            parsed_output = device.parse(command)
-            logger.info(f"Parsed ping output for '{command}' on {device_name}")
-            return {"status": "completed", "device": device_name, "output": parsed_output}
-        except Exception as parse_exc:
-            logger.warning(f"Parsing ping failed for '{command}' on {device_name}: {parse_exc}. Falling back to execute.")
-            raw_output = device.execute(command)
-            logger.info(f"Executed ping (fallback): '{command}' on {device_name}")
-            return {"status": "completed_raw", "device": device_name, "output": raw_output}
+            parsed = device.parse(command)
+            return {"status": "completed", "device": device_name, "output": parsed}
+        except Exception:
+            raw = device.execute(command)
+            return {"status": "completed_raw", "device": device_name, "output": raw}
     except Exception as e:
-        logger.error(f"Error executing ping: {e}", exc_info=True)
-        return {"status": "error", "error": f"Ping execution error: {e}"}
+        return {"status": "error", "error": str(e)}
     finally:
         _disconnect_device(device)
 
-async def run_linux_command_async(device_name: str, command: str) -> Dict[str, Any]:
-    """Execute a Linux command on a device."""
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, partial(_execute_linux_command, device_name, command))
-        return result
-    except Exception as e:
-        logger.error(f"Error in run_linux_command_async: {e}", exc_info=True)
-        return {"status": "error", "error": f"Linux command execution error: {e}"}
 
-def _execute_linux_command(device_name: str, command: str) -> Dict[str, Any]:
-    """Synchronous helper for Linux command execution."""
+async def run_linux_command_async(device_name: str, command: str):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_execute_linux_command, device_name, command))
+
+
+def _execute_linux_command(device_name: str, command: str):
     device = None
     try:
-        logger.info("Loading testbed...")
         testbed = loader.load(TESTBED_PATH)
-        
         if device_name not in testbed.devices:
-            return {"status": "error", "error": f"Device '{device_name}' not found in testbed."}
-        
+            return {"status": "error", "error": "Linux device not found"}
+
         device = testbed.devices[device_name]
-        
         if not device.is_connected():
-            logger.info(f"Connecting to {device_name} via SSH...")
             device.connect()
-        
-        if ">" in command or "|" in command:
-            logger.info(f"Detected redirection or pipe in command: {command}")
-            command = f'sh -c "{command}"'
-        
+
+        # Try parsers then execute raw
         try:
             parser = get_parser(command, device)
             if parser:
-                logger.info(f"Parsing output for command: {command}")
-                output = device.parse(command)
+                out = device.parse(command)
             else:
-                raise ValueError("No parser available")
-        except Exception as e:
-            logger.warning(f"No parser found for command: {command}. Using `execute` instead. Error: {e}")
-            output = device.execute(command)
-        
-        logger.info(f"Disconnecting from {device_name}...")
-        device.disconnect()
-        
-        return {"status": "completed", "device": device_name, "output": output}
+                raise ValueError("No parser")
+        except Exception:
+            out = device.execute(command)
+
+        return {"status": "completed", "device": device_name, "output": out}
+
     except Exception as e:
-        logger.error(f"Error executing Linux command: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
     finally:
-        if device and device.is_connected():
-            try:
-                device.disconnect()
-            except:
-                pass
+        _disconnect_device(device)
 
-# --- Initialize FastMCP ---
+
+# ---------------------------
+# MCP Tools
+# ---------------------------
+
 mcp = FastMCP("pyATS Network Automation Server")
 
-# --- Define Tools ---
 
 @mcp.tool()
 async def pyats_run_show_command(device_name: str, command: str) -> str:
-    """
-    Execute a Cisco IOS/NX-OS 'show' command on a specified device.
-    
-    Args:
-        device_name: The name of the device in the testbed
-        command: The show command to execute (e.g., 'show ip interface brief')
-    
-    Returns:
-        JSON string containing the command output
-    """
-    try:
-        result = await run_show_command_async(device_name, command)
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in pyats_run_show_command: {e}", exc_info=True)
-        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+    return toon_with_stats(await run_show_command_async(device_name, command))
+
 
 @mcp.tool()
 async def pyats_configure_device(device_name: str, config_commands: str) -> str:
-    """
-    Apply configuration commands to a Cisco IOS/NX-OS device.
-    
-    Args:
-        device_name: The name of the device in the testbed
-        config_commands: Configuration commands to apply (can be multi-line)
-    
-    Returns:
-        JSON string containing the configuration result
-    """
-    try:
-        result = await apply_device_configuration_async(device_name, config_commands)
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in pyats_configure_device: {e}", exc_info=True)
-        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+    return toon_with_stats(await apply_device_configuration_async(device_name, config_commands))
+
 
 @mcp.tool()
 async def pyats_show_running_config(device_name: str) -> str:
-    """
-    Retrieve the running configuration from a Cisco IOS/NX-OS device.
-    
-    Args:
-        device_name: The name of the device in the testbed
-    
-    Returns:
-        JSON string containing the running configuration
-    """
-    try:
-        result = await execute_learn_config_async(device_name)
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in pyats_show_running_config: {e}", exc_info=True)
-        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+    return toon_with_stats(await execute_learn_config_async(device_name))
+
 
 @mcp.tool()
 async def pyats_show_logging(device_name: str) -> str:
-    """
-    Retrieve recent system logs from a Cisco IOS/NX-OS device.
-    
-    Args:
-        device_name: The name of the device in the testbed
-    
-    Returns:
-        JSON string containing the recent logs
-    """
-    try:
-        result = await execute_learn_logging_async(device_name)
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in pyats_show_logging: {e}", exc_info=True)
-        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+    return toon_with_stats(await execute_learn_logging_async(device_name))
+
 
 @mcp.tool()
 async def pyats_ping_from_network_device(device_name: str, command: str) -> str:
-    """
-    Execute a ping command from a Cisco IOS/NX-OS device.
-    
-    Args:
-        device_name: The name of the device in the testbed
-        command: The ping command to execute (e.g., 'ping 8.8.8.8')
-    
-    Returns:
-        JSON string containing the ping results
-    """
-    try:
-        result = await run_ping_command_async(device_name, command)
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in pyats_ping_from_network_device: {e}", exc_info=True)
-        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+    return toon_with_stats(await run_ping_command_async(device_name, command))
+
 
 @mcp.tool()
 async def pyats_run_linux_command(device_name: str, command: str) -> str:
-    """
-    Execute a Linux command on a specified device.
-    
-    Args:
-        device_name: The name of the Linux device in the testbed
-        command: The Linux command to execute (e.g., 'ifconfig', 'ps -ef')
-    
-    Returns:
-        JSON string containing the command output
-    """
-    try:
-        result = await run_linux_command_async(device_name, command)
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        logger.error(f"Error in pyats_run_linux_command: {e}", exc_info=True)
-        return json.dumps({"status": "error", "error": str(e)}, indent=2)
+    return toon_with_stats(await run_linux_command_async(device_name, command))
+
+
+# ---------------------------
+# File Search Tools
+# ---------------------------
 
 @mcp.tool()
 async def upload_and_index(json_path: str) -> str:
-    """
-    Upload a JSON or text file to Gemini File Search for RAG augmentation.
-    Useful for large CLI outputs or pyATS parsed results.
-    """
-    import asyncio, os
+    """Upload a file to Gemini File Search."""
+    import os
 
     if not os.path.exists(json_path):
-        raise FileNotFoundError(f"{json_path} not found")
+        raise FileNotFoundError(json_path)
 
     store = client.file_search_stores.create(
-        config={"display_name": f"pyats_store_{int(asyncio.get_event_loop().time())}"}
+        config={"display_name": f"pyats_store"}
     )
-    store_name = getattr(store, "name", str(store))
-    print(f"🪣 Using FileSearchStore name: {store_name}")
+    store_name = store.name
 
     op = client.file_search_stores.upload_to_file_search_store(
         file_search_store_name=store_name,
@@ -488,69 +375,50 @@ async def upload_and_index(json_path: str) -> str:
         },
     )
 
-    op_name = getattr(op, "name", str(op))
-    # Poll asynchronously (non-blocking)
+    # Poll
+    op_name = op.name
     for _ in range(60):
-        try:
-            current = client.operations.get(op_name)
-            if getattr(current, "done", False) or (
-                isinstance(current, dict) and current.get("done")
-            ):
-                break
-        except Exception as e:
-            print(f"⚠️ Polling error: {e}")
+        curr = client.operations.get(op_name)
+        if curr.done:
+            break
         await asyncio.sleep(2)
 
     return store_name
 
+
 @mcp.tool()
 async def analyze_router(store_name: str, question: str) -> dict:
-    """
-    Ask Gemini 2.5 Flash a question about a router or network dataset
-    using Gemini File Search grounding.
-
-    Args:
-        store_name: The File Search store name returned from upload_and_index
-        question: The natural-language question to ask
-
-    Returns:
-        A dict containing the AI's answer and grounding metadata
-    """
-    if not store_name:
-        raise ValueError("Missing File Search store name.")
-    if not question:
-        raise ValueError("Missing analysis question.")
-
-    loop = asyncio.get_event_loop()
-    resp = await loop.run_in_executor(
-        None,
-        lambda: client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=question,
-            config=types.GenerateContentConfig(
-                tools=[
-                    types.Tool(
-                        file_search=types.FileSearch(
-                            file_search_store_names=[store_name]
-                        )
+    """Ask Gemini 2.5 Flash with File Search grounding."""
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=question,
+        config=gtypes.GenerateContentConfig(
+            tools=[
+                gtypes.Tool(
+                    file_search=gtypes.FileSearch(
+                        file_search_store_names=[store_name]
                     )
-                ]
-            ),
+                )
+            ]
         ),
     )
 
-    grounding = getattr(resp.candidates[0], "grounding_metadata", None)
+    grounding = resp.candidates[0].grounding_metadata
     sources = []
-    if grounding and getattr(grounding, "grounding_chunks", None):
+    if grounding and grounding.grounding_chunks:
         sources = [c.retrieved_context.title for c in grounding.grounding_chunks]
 
     return {
         "answer": resp.text,
         "sources": sources,
-        "store": store_name
+        "store": store_name,
     }
 
-# --- Main Function ---
+
+# ---------------------------
+# Main
+# ---------------------------
+
 if __name__ == "__main__":
-    logger.info("🚀 Starting pyATS FastMCP Server...")
+    logger.info("🚀 Starting pyATS FastMCP Server with TOON + Token Savings...")
     mcp.run()
