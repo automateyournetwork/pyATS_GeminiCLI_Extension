@@ -110,7 +110,7 @@ def toon_with_stats(data: Any) -> str:
     logger.debug(json.dumps(safe, indent=2))
     logger.debug("=== JSON-SAFE DATA END ===")
 
-    json_str = json.dumps(safe, indent=2)
+    json_str = json.dumps(safe)
 
     # 3) ATTEMPT TOON ENCODE
     try:
