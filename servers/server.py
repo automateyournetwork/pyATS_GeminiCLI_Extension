@@ -115,6 +115,9 @@ def toon_with_stats(data: Any) -> str:
 
     try:
         toon_str = toon_encode(safe, keyFolding="safe", indent=2)
+        print("TOON conversion successful")
+        print(toon_str)
+        logger.info(toon_str)
     except Exception as e:
         logger.error(f"TOON conversion failed: {e}", exc_info=True)
         # Fallback: plain JSON so you still see data
