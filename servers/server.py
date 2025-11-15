@@ -80,7 +80,7 @@ def toon_with_stats(data: dict) -> str:
     logger.info("\n[TOON OUTPUT]\n" + toon_str + "\n")
 
     # THE FIX: prefix forces Gemini to treat as raw text
-    return f"@@TOON@@\n```toon\n{toon_str}\n```"
+    return "```toon\n" + toon_str + "\n```"
 
 # ---------------------------
 # Device Connection Helpers
