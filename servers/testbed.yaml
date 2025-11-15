@@ -128,9 +128,9 @@ devices:
     credentials:
       default:
         username: ptcapo
-        password: GiaTLj7MV-83-U
+        password: x-91WHeymA1-
       enable:
-        password: GiaTLj7MV-83-U
+        password: x-91WHeymA1-
     connections:
       cli:
         protocol: ssh
