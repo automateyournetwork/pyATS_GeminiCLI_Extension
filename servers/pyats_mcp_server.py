@@ -306,7 +306,7 @@ def _execute_linux_command(device_name: str, command: str):
 mcp = FastMCP("pyATS Network Automation Server")
 
 
-@mcp.tool()
+@mcp.tool(return_text=True)
 async def pyats_run_show_command(device_name: str, command: str) -> str:
     return toon_with_stats(await run_show_command_async(device_name, command))
 
@@ -326,12 +326,12 @@ async def pyats_show_logging(device_name: str) -> str:
     return toon_with_stats(await execute_learn_logging_async(device_name))
 
 
-@mcp.tool()
+@mcp.tool(return_text=True)
 async def pyats_ping_from_network_device(device_name: str, command: str) -> str:
     return toon_with_stats(await run_ping_command_async(device_name, command))
 
 
-@mcp.tool()
+@mcp.tool(return_text=True)
 async def pyats_run_linux_command(device_name: str, command: str) -> str:
     return toon_with_stats(await run_linux_command_async(device_name, command))
 
