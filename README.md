@@ -5,7 +5,7 @@ An Extension for Gemini-CLI that enables pyATS
 
 ```bash
 
-gemini extensions install —source https://github.com/automateyournetwork/pyATS_GeminiCLI_Extension.git
+gemini extensions install https://github.com/automateyournetwork/pyATS_GeminiCLI_Extension.git
 
 ```
 
