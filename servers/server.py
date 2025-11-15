@@ -17,8 +17,6 @@ from mcp.server.fastmcp import FastMCP
 from toon_format import encode as toon_encode
 import tiktoken
 
-sys.stdout = sys.stderr
-
 # --- Logging ---
 logging.basicConfig(
     level=logging.INFO,
