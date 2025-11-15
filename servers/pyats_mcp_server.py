@@ -33,7 +33,7 @@ logger = logging.getLogger("PyATSFastMCPServer")
 
 # --- Load ENV ---
 load_dotenv()
-TESTBED_PATH = os.getenv("PYATS_TESTBED_PATH")
+TESTBED_PATH = ("testbed.yaml")
 
 if not TESTBED_PATH or not os.path.exists(TESTBED_PATH):
     logger.critical(
