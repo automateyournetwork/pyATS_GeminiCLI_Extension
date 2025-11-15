@@ -107,7 +107,7 @@ def toon_with_stats(data: Any) -> str:
     safe = make_json_safe(data)
 
     logger.debug("=== JSON-SAFE DATA (safe) START ===")
-    logger.debug(json.dumps(safe, indent=2))
+    logger.debug(json.dumps(safe)
     logger.debug("=== JSON-SAFE DATA END ===")
 
     json_str = json.dumps(safe)
@@ -115,7 +115,7 @@ def toon_with_stats(data: Any) -> str:
     # 3) ATTEMPT TOON ENCODE
     try:
         logger.debug("=== ATTEMPTING TOON ENCODE NOW ===")
-        toon_str = toon_encode(safe, indent=2)
+        toon_str = toon_encode(safe)
 
         logger.debug("=== RAW TOON ENCODE OUTPUT START ===")
         logger.debug(toon_str)
